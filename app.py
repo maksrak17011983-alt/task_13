@@ -3,48 +3,85 @@ import requests
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="GitHub Monitor", layout="wide")
+# 1. Налаштування сторінки
+st.set_page_config(page_title="GitHub Project Monitor", layout="wide")
 
-# 1. Отримання даних з API
-def get_github_data(user):
-    url = f"https://api.github.com/users/{user}/repos"
+# 2. Функція для отримання даних через GitHub API
+@st.cache_data(ttl=3600) # Кешуємо дані на годину, щоб не перевищити ліміти API
+def get_github_data(username):
+    # Отримуємо список публічних репозиторіїв
+    url = f"https://api.github.com/users/{username}/repos?per_page=100"
     response = requests.get(url)
     if response.status_code == 200:
         return response.json()
     return None
 
+# 3. Інтерфейс
 st.title("📊 Моніторинг проєктів у GitHub")
-username = st.text_input("Введіть нікнейм користувача GitHub:", value="streamlit")
+st.markdown("---")
 
-if username:
-    data = get_github_data(username)
+# Ввід імені користувача (наприклад: streamlit, google, apple або твій нік)
+target_user = st.text_input("Введіть нікнейм користувача GitHub:", value="streamlit")
+
+if target_user:
+    with st.spinner('Отримання даних з GitHub API...'):
+        raw_data = get_github_data(target_user)
     
-    if data:
-        # Перетворюємо дані в таблицю
-        df = pd.DataFrame(data)
+    if raw_data:
+        # Створюємо DataFrame з потрібними нам полями
+        df = pd.DataFrame(raw_data)
         
-        # Вибираємо потрібні колонки
-        df_display = df[['name', 'stargazers_count', 'forks_count', 'open_issues_count']]
-        df_display.columns = ['Назва проєкту', 'Зірки ⭐', 'Форки 🍴', 'Issues 🛠']
-
-        # --- БЛОК 1: Рейтинг за зірками ---
-        st.subheader("🏆 Рейтинг проєктів за зірками")
-        fig_stars = px.bar(df_display.sort_values('Зірки ⭐', ascending=False).head(10), 
-                           x='Зірки ⭐', y='Назва проєкту', orientation='h',
-                           color='Зірки ⭐', color_continuous_scale='Viridis')
+        # Вибираємо тільки необхідні колонки для аналізу
+        # stargazers_count (зірки), forks_count (форки), open_issues_count (активні задачі)
+        analysis_df = df[['name', 'stargazers_count', 'forks_count', 'open_issues_count', 'updated_at']]
+        analysis_df.columns = ['Проєкт', 'Зірки ⭐', 'Форки 🍴', 'Issues 🛠', 'Оновлено']
+        
+        # --- БЛОК 1: РЕЙТИНГ ЗА ЗІРКАМИ ---
+        st.subheader("🏆 Рейтинг проєктів за популярністю (Stars)")
+        top_stars = analysis_df.sort_values('Зірки ⭐', ascending=False).head(10)
+        
+        fig_stars = px.bar(
+            top_stars, 
+            x='Зірки ⭐', 
+            y='Проєкт', 
+            orientation='h',
+            color='Зірки ⭐',
+            color_continuous_scale='Viridis',
+            text='Зірки ⭐'
+        )
+        fig_stars.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_stars, use_container_width=True)
 
-        # --- БЛОК 2: Граф активності (Issues vs Forks) ---
-        st.subheader("📈 Граф активності та популярності")
-        fig_activity = px.scatter(df_display, x='Зірки ⭐', y='Issues 🛠', 
-                                  size='Форки 🍴', hover_name='Назва проєкту',
-                                  title="Співвідношення популярності та відкритих задач")
+        # --- БЛОК 2: ГРАФ АКТИВНОСТІ (Issues vs Stars) ---
+        st.subheader("📈 Аналіз динаміки та активності розробки")
+        # Розмір бульбашки залежить від кількості форків
+        fig_activity = px.scatter(
+            analysis_df, 
+            x='Зірки ⭐', 
+            y='Issues 🛠',
+            size='Форки 🍴', 
+            hover_name='Проєкт',
+            color='Issues 🛠',
+            title="Співвідношення зірок та відкритих Issues (Розмір = Форки)",
+            labels={'Issues 🛠': 'Відкриті задачі (Issues)', 'Зірки ⭐': 'Кількість зірок'}
+        )
         st.plotly_chart(fig_activity, use_container_width=True)
 
-        # --- БЛОК 3: Аналіз динаміки (Таблиця) ---
-        st.subheader("📋 Аналіз динаміки розробки")
-        st.dataframe(df_display.sort_values('Issues 🛠', ascending=False), use_container_width=True)
+        # --- БЛОК 3: ДЕТАЛЬНА ТАБЛИЦЯ ТА АНАЛІЗ ---
+        st.subheader("🔍 Детальний аналіз репозиторіїв")
         
-        st.info(f"Всього знайдено репозиторіїв для {username}: {len(df)}")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Всього проєктів", len(df))
+        with col2:
+            st.metric("Загальна к-сть зірок", analysis_df['Зірки ⭐'].sum())
+        with col3:
+            st.metric("Активних Issues", analysis_df['Issues 🛠'].sum())
+
+        st.dataframe(analysis_df.sort_values('Зірки ⭐', ascending=False), use_container_width=True)
+        
     else:
-        st.error("Користувача не знайдено або перевищено ліміт запитів API.")
+        st.error("Користувача не знайдено або ліміт запитів GitHub API вичерпано. Спробуйте пізніше.")
+
+st.markdown("---")
+st.caption("Дані завантажуються в реальному часі через GitHub REST API v3")
